@@ -2,7 +2,6 @@ package amqp
 
 import (
 	"sync"
-	"time"
 
 	"github.com/Rican7/retry"
 	"github.com/Rican7/retry/strategy"
@@ -10,82 +9,23 @@ import (
 	"gopkg.in/adone/go.events.v2"
 )
 
-type params struct {
-	event    string
-	queue    Queue
-	retries  uint
-	pause    time.Duration
-	failfast bool
-	qos      int
-}
-
-var defaults = params{
-	retries: 10,
-	pause:   time.Second,
-}
-
-type ListenOption struct {
-	apply func(*params)
-}
-
-func WithQueue(queue Queue) ListenOption {
-	return ListenOption{
-		apply: func(params *params) {
-			params.queue = queue
-		},
-	}
-}
-
-func WithEvent(event string) ListenOption {
-	return ListenOption{
-		apply: func(params *params) {
-			params.event = event
-		},
-	}
-}
-
-func WithQoS(count int) ListenOption {
-	return ListenOption{
-		apply: func(params *params) {
-			params.qos = count
-		},
-	}
-}
-
-func WithMaxRetries(count uint) ListenOption {
-	return ListenOption{
-		apply: func(params *params) {
-			params.retries = count
-		},
-	}
-}
-
-func WithRetryPause(duration time.Duration) ListenOption {
-	return ListenOption{
-		apply: func(params *params) {
-			params.pause = duration
-		},
-	}
-}
-
 type Listener struct {
 	*events.Emitter
 
-	guard    sync.Mutex
-	start    chan events.Event
-	stop     chan events.Event
-	errors   chan events.Event
-	data     chan events.Event
-	driver   *Driver
-	consumer *Consumer
+	params ListenerParams
+	driver *Driver
+	guard  sync.Mutex
+	start  chan events.Event
+	stop   chan events.Event
+	errors chan events.Event
+	data   chan events.Event
 }
 
-func NewListener(driver *Driver) *Listener {
+func NewListener(driver *Driver, params ListenerParams) *Listener {
 	listener := new(Listener)
 	listener.Emitter = events.NewEmitter()
-
+	listener.params = params
 	listener.driver = driver
-
 	listener.start = make(chan events.Event, 1)
 	listener.stop = make(chan events.Event, 1)
 	listener.data = make(chan events.Event)
@@ -94,14 +34,8 @@ func NewListener(driver *Driver) *Listener {
 	return listener
 }
 
-func (listener *Listener) Listen(options ...ListenOption) error {
-	params := defaults
-
-	for _, option := range options {
-		option.apply(&params)
-	}
-
-	if params.queue.Name == "" {
+func (listener *Listener) Listen() error {
+	if listener.params.Queue.Name == "" {
 		return errors.Errorf("empty queue name")
 	}
 
@@ -114,7 +48,7 @@ func (listener *Listener) Listen(options ...ListenOption) error {
 	defer listener.RemoveEventListener(events.Stream(listener.stop))
 	defer listener.RemoveEventListener(events.Stream(listener.errors))
 
-	consumer, err := listener.restart(nil, params)
+	consumer, err := listener.restart(nil)
 	if err != nil {
 		return err
 	}
@@ -122,13 +56,13 @@ func (listener *Listener) Listen(options ...ListenOption) error {
 	for {
 		select {
 		case event := <-listener.data:
-			if params.event != "" {
-				listener.Fire(events.New(params.event, events.WithContext(event.Context)))
+			if listener.params.Event != "" {
+				listener.Fire(events.New(listener.params.Event, events.WithContext(event.Context)))
 			} else {
 				listener.Fire(events.New(event.Context["key"], events.WithContext(event.Context)))
 			}
 		case <-listener.errors:
-			consumer, err = listener.restart(consumer, params)
+			consumer, err = listener.restart(consumer)
 			if err != nil {
 				return err
 			}
@@ -155,6 +89,7 @@ func (listener *Listener) shutdown(consumer *Consumer) error {
 		consumer.RemoveEventListener(events.Stream(listener.start))
 		consumer.RemoveEventListener(events.Stream(listener.errors))
 		consumer.RemoveEventListener(events.Stream(listener.data))
+
 		if err := consumer.Stop(); err != nil {
 			return err
 		}
@@ -165,17 +100,17 @@ func (listener *Listener) shutdown(consumer *Consumer) error {
 	return nil
 }
 
-func (listener *Listener) restart(consumer *Consumer, params params) (*Consumer, error) {
+func (listener *Listener) restart(consumer *Consumer) (*Consumer, error) {
 	listener.shutdown(consumer)
 
 	connect := func(attempt uint) (err error) {
-		consumer, err = listener.driver.Consumer()
+		consumer, err = listener.driver.Consumer(listener.params.Queue)
 		return
 	}
 
-	if err := retry.Retry(connect, strategy.Limit(params.retries), strategy.Wait(params.pause)); err != nil {
-		err = errors.Wrapf(err, "connect to AMQP queue '%s' failed after %d retries", params.queue.Name, params.retries)
-		if params.failfast {
+	if err := retry.Retry(connect, strategy.Limit(listener.params.Retries), strategy.Wait(listener.params.Pause)); err != nil {
+		err = errors.Wrapf(err, "connect to AMQP queue '%s' failed after %d retries", listener.params.Queue.Name, listener.params.Retries)
+		if listener.params.FailFast {
 			return nil, err
 		}
 
@@ -188,12 +123,7 @@ func (listener *Listener) restart(consumer *Consumer, params params) (*Consumer,
 		On(ConsumerClosed, events.Stream(listener.errors)).
 		On(ConsumerData, events.Stream(listener.data))
 
-	consumer.Queue = params.queue.Name
-	consumer.MaxMessages = params.qos
-
-	if err := listener.driver.DeclareQueue(params.queue); err != nil {
-		return nil, err
-	}
+	consumer.QoS = listener.params.QoS
 
 	listener.Fire(ListenStart)
 
