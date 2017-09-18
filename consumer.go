@@ -10,34 +10,34 @@ import (
 type Consumer struct {
 	*events.Emitter
 
-	MaxMessages int
-	Queue       string
+	QoS int
 
+	queue   Queue
 	tag     string
 	channel *amqp.Channel
-	error   chan error
+	fail    chan error
 	done    chan struct{}
 }
 
 // Start consuming messages
 func (consumer *Consumer) Start() error {
 	consumer.done = make(chan struct{})
-	consumer.error = make(chan error)
+	consumer.fail = make(chan error)
 
-	defer close(consumer.error)
+	defer close(consumer.fail)
 
-	if err := consumer.channel.Qos(consumer.MaxMessages, 0, false); err != nil {
+	if err := consumer.channel.Qos(consumer.QoS, 0, false); err != nil {
 		return err
 	}
 
 	deliveries, err := consumer.channel.Consume(
-		consumer.Queue, // name
-		consumer.tag,   // consumerTag
-		false,          // noAck
-		false,          // exclusive
-		false,          // noLocal
-		false,          // noWait
-		nil,            // arguments
+		consumer.queue.Name, // name
+		consumer.tag,        // consumerTag
+		false,               // noAck
+		false,               // exclusive
+		false,               // noLocal
+		false,               // noWait
+		nil,                 // arguments
 	)
 
 	if err != nil {
@@ -47,7 +47,7 @@ func (consumer *Consumer) Start() error {
 	go consumer.listenChannel()
 	go consumer.listenDeliveries(deliveries)
 
-	return <-consumer.error
+	return <-consumer.fail
 }
 
 // Stop consumimg messages
@@ -76,7 +76,7 @@ func (consumer *Consumer) listenDeliveries(deliveries <-chan amqp.Delivery) {
 		consumer.Fire(events.New(ConsumerData, events.WithContext(events.Map{
 			"key":   delivery.RoutingKey,
 			"data":  Message{delivery},
-			"queue": consumer.Queue,
+			"queue": consumer.queue,
 		})))
 	}
 }
@@ -85,11 +85,11 @@ func (consumer *Consumer) listenChannel() {
 	select {
 	case reason := <-consumer.channel.NotifyCancel(make(chan string)):
 		consumer.Fire(events.New(ConsumerCanceled, events.WithContext(events.Map{"consumer": consumer})))
-		consumer.error <- errors.Errorf("channel canceled: %s", reason)
+		consumer.fail <- errors.Errorf("channel canceled: %s", reason)
 	case err := <-consumer.channel.NotifyClose(make(chan *amqp.Error)):
 		consumer.Fire(events.New(ConsumerClosed, events.WithContext(events.Map{"consumer": consumer, "error": err})))
-		consumer.error <- err
+		consumer.fail <- err
 	case <-consumer.done:
-		consumer.error <- nil
+		consumer.fail <- nil
 	}
 }

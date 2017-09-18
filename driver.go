@@ -98,7 +98,7 @@ func (driver *Driver) setup() error {
 
 	if len(driver.configuration.Exchanges) > 0 {
 		for _, exchange := range driver.configuration.Exchanges {
-			if err := driver.declareExchange(exchange, channel); err != nil {
+			if err := exchange.declare(channel); err != nil {
 				return err
 			}
 		}
@@ -106,7 +106,7 @@ func (driver *Driver) setup() error {
 
 	if len(driver.configuration.Queues) > 0 {
 		for _, queue := range driver.configuration.Queues {
-			if err := driver.declareQueue(queue, channel); err != nil {
+			if err := queue.declare(channel); err != nil {
 				return err
 			}
 		}
@@ -130,41 +130,7 @@ func (driver *Driver) DeclareExchange(exchange Exchange) error {
 
 	defer channel.Close()
 
-	return driver.declareExchange(exchange, channel)
-}
-
-func (Driver) declareExchange(exchange Exchange, channel *amqp.Channel) error {
-	err := channel.ExchangeDeclare(
-		exchange.Name,    // name of the exchange
-		exchange.Type,    // type
-		exchange.Durable, // durable
-		false,            // delete when complete
-		false,            // internal
-		false,            // noWait
-		nil,              // arguments
-	)
-
-	if err != nil {
-		return errors.Wrap(err, "declare exchange failed")
-	}
-
-	if len(exchange.Bindings) > 0 {
-		for _, binding := range exchange.Bindings {
-			err = channel.ExchangeBind(
-				exchange.Name,    // name of the exchange
-				binding.Key,      // bindingKey
-				binding.Exchange, // sourceExchange
-				false,            // noWait
-				nil,              // arguments
-			)
-
-			if err != nil {
-				return errors.Wrap(err, "bind exchange failed")
-			}
-		}
-	}
-
-	return nil
+	return exchange.declare(channel)
 }
 
 func (driver *Driver) DeclareQueue(queue Queue) error {
@@ -182,43 +148,10 @@ func (driver *Driver) DeclareQueue(queue Queue) error {
 
 	defer channel.Close()
 
-	return driver.declareQueue(queue, channel)
+	return queue.declare(channel)
 }
 
-func (Driver) declareQueue(queue Queue, channel *amqp.Channel) error {
-	_, err := channel.QueueDeclare(
-		queue.Name,      // name of the queue
-		queue.Durable,   // durable
-		queue.Deletable, // delete when usused
-		false,           // exclusive
-		false,           // noWait
-		queue.Arguments.ToMap(), // arguments
-	)
-
-	if err != nil {
-		return errors.Wrap(err, "declare queue failed")
-	}
-
-	if len(queue.Bindings) > 0 {
-		for _, binding := range queue.Bindings {
-			err = channel.QueueBind(
-				queue.Name,       // name of the queue
-				binding.Key,      // bindingKey
-				binding.Exchange, // sourceExchange
-				false,            // noWait
-				nil,              // arguments
-			)
-
-			if err != nil {
-				return errors.Wrap(err, "bind queue failed")
-			}
-		}
-	}
-
-	return nil
-}
-
-func (driver *Driver) Producer() (*Producer, error) {
+func (driver *Driver) Producer(exchange Exchange) (*Producer, error) {
 	driver.guard.RLock()
 	defer driver.guard.RUnlock()
 
@@ -229,19 +162,23 @@ func (driver *Driver) Producer() (*Producer, error) {
 	channel, err := driver.connection.Channel()
 	if err != nil {
 		return nil, errors.Wrap(err, "get channel failed")
+	}
+
+	if err := exchange.declare(channel); err != nil {
+		return nil, err
 	}
 
 	if err := channel.Confirm(false); err != nil {
 		return nil, errors.Wrap(err, "set confirmation mode failed")
 	}
 
-	// producer.counter = 1
-	// producer.confirms = producer.channel.NotifyPublish(make(chan amqp.Confirmation, 1))
-	// go producer.start()
-	return &Producer{channel: channel}, nil
+	return &Producer{
+		exchange: exchange,
+		channel:  channel,
+	}, nil
 }
 
-func (driver *Driver) Consumer() (*Consumer, error) {
+func (driver *Driver) Consumer(queue Queue) (*Consumer, error) {
 	driver.guard.RLock()
 	defer driver.guard.RUnlock()
 
@@ -254,8 +191,13 @@ func (driver *Driver) Consumer() (*Consumer, error) {
 		return nil, errors.Wrap(err, "get channel failed")
 	}
 
+	if err := queue.declare(channel); err != nil {
+		return nil, err
+	}
+
 	return &Consumer{
 		Emitter: events.NewEmitter(),
+		queue:   queue,
 		channel: channel,
 		tag:     driver.ConsumerTagBuilder.Build(driver),
 	}, nil

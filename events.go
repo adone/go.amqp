@@ -1,7 +1,7 @@
 package amqp
 
 const (
-	ConnectError      = "amqp:connect:error"
+	ConnectError      = "amqp:connection:error"
 	ConnectionClosed  = "amqp:connection:closed"
 	ConsumerConnected = "amqp:consumer:connected"
 	ConsumerCanceled  = "amqp:consumer:canceled"
@@ -10,4 +10,7 @@ const (
 	ListenStart       = "amqp:listen:start"
 	ListenStop        = "amqp:listen:stop"
 	ListenError       = "amqp:listen:error"
+	ProducerConnected = "amqp:producer:connected"
+	PublishError      = "amqp:publisher:error"
+	PublisherFailed   = "amqp:publisher:failed"
 )
