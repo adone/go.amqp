@@ -1,17 +1,15 @@
 package amqp
 
 import (
-	"gopkg.in/adone/go.events.v2"
-
 	"github.com/Rican7/retry"
 	"github.com/Rican7/retry/strategy"
 	"github.com/pkg/errors"
+	"github.com/streadway/amqp"
+	"gopkg.in/gopaws/go.events.v2"
 
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/streadway/amqp"
 )
 
 type ConsumerTagBuilder interface {

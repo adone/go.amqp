@@ -6,7 +6,7 @@ import (
 	"github.com/Rican7/retry"
 	"github.com/Rican7/retry/strategy"
 	"github.com/pkg/errors"
-	"gopkg.in/adone/go.events.v2"
+	"gopkg.in/gopaws/go.events.v2"
 )
 
 type Listener struct {

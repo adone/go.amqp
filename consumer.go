@@ -3,7 +3,7 @@ package amqp
 import (
 	"github.com/pkg/errors"
 	"github.com/streadway/amqp"
-	"gopkg.in/adone/go.events.v2"
+	"gopkg.in/gopaws/go.events.v2"
 )
 
 // Consumer consume messages from message broker
